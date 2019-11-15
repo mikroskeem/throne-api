@@ -25,6 +25,10 @@ func main() {
 	if err != nil {
 		zap.L().Panic("failed to open database connection", zap.Error(err))
 	}
+	db.SetMaxOpenConns(32)
+	db.SetMaxIdleConns(64)
+	db.SetConnMaxLifetime(5 * time.Minute)
+	defer db.Close()
 
 	// Set up HTTP server
 	router := mux.NewRouter()
@@ -38,7 +42,7 @@ func main() {
 		json.NewEncoder(w).Encode(ErrorResponse{"not done yet"})
 	})
 
-	router.HandleFunc("/api/v1/staff", func(w http.ResponseWriter, r *http.Request) {
+	router.HandleFunc("/api/v1/player/{player}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(ErrorResponse{"not done yet"})
 	})
