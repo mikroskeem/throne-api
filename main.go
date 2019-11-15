@@ -1,10 +1,8 @@
 package main
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
-        "fmt"
 	"net/http"
 	"time"
 
@@ -16,29 +14,6 @@ import (
 
 type ErrorResponse struct {
 	Message string `json:"error"`
-}
-
-func testConnection(db *sql.DB, timeout time.Duration) error {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	done := make(chan error, 1)
-
-	go func() {
-		rows, err := db.QueryContext(ctx, "SELECT 1;")
-		if err != nil {
-			done <- err
-			return
-		}
-		rows.Close()
-		done <- nil
-	}()
-
-	select {
-	case err := <-done:
-		return err
-	case <-ctx.Done():
-		return fmt.Errorf("timed out (%dms) while testing database connection", timeout / (1000 * 1000))
-	}
 }
 
 func main() {
@@ -62,7 +37,7 @@ func main() {
 	defer db.Close()
 
 	// Test databse connection
-	if err := testConnection(db, 5 * time.Second); err != nil {
+	if err := db.Ping(); err != nil {
 		zap.L().Panic("failed to test database connection", zap.Error(err))
 	}
 
