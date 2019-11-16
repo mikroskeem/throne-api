@@ -22,6 +22,10 @@ const (
 	okStatus    = "ok"
 )
 
+var (
+	config throneAPIConfig
+)
+
 type VoterInfo struct {
 	Username  string `json:"voter_name"`
 	Votes     int    `json:"votes"`
@@ -42,6 +46,8 @@ func writeResponse(w http.ResponseWriter, status int, body interface{}) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", config.RestAPI.CORSOrigins)
+	w.Header().Set("Access-Control-Allow-Methods", "GET")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(StatusResponse{stringStatus, body})
 }
@@ -62,7 +68,6 @@ func main() {
 		zap.L().Panic("failed to read configuration", zap.Error(err))
 	}
 
-	var config throneAPIConfig
 	if err = toml.Unmarshal(rawConfig, &config); err != nil {
 		zap.L().Panic("failed to parse configuration", zap.Error(err))
 	}

@@ -7,6 +7,7 @@ type throneAPIConfig struct {
 
 type restAPIConfig struct {
 	ListenAddress string `toml:"listen_address"`
+	CORSOrigins   string `toml:"cors_origin"`
 }
 
 type throneDatabaseConfig struct {
