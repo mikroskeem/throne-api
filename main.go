@@ -23,8 +23,9 @@ const (
 )
 
 type VoterInfo struct {
-	Username string `json:"voter_name"`
-	Votes    int    `json:"votes"`
+	Username  string `json:"voter_name"`
+	Votes     int    `json:"votes"`
+	Timestamp uint64 `json:"last_vote_timestamp"`
 }
 
 type StatusResponse struct {
@@ -94,7 +95,7 @@ func main() {
 		go func() {
 			rows, err := db.QueryContext(ctx,
 				// Pls no bully but prepared statements are not needed here - not handling user input, technically
-				fmt.Sprintf("select voter_name, votes from %s.%s order by votes desc;",
+				fmt.Sprintf("select voter_name, votes, last_vote_timestamp from %s.%s order by votes desc;",
 					config.Database.ConfettiDatabaseName,
 					config.Database.ConfettiVotesTableName))
 			if err != nil {
@@ -106,7 +107,7 @@ func main() {
 			voters := []VoterInfo{}
 			for rows.Next() {
 				voter := VoterInfo{}
-				if err := rows.Scan(&(voter.Username), &(voter.Votes)); err != nil {
+				if err := rows.Scan(&(voter.Username), &(voter.Votes), &(voter.Timestamp)); err != nil {
 					zap.L().Warn("failed to scan row", zap.Error(err))
 					continue
 				}
