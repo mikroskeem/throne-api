@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -31,6 +32,17 @@ type VoterInfo struct {
 	Username  string `json:"voter_name"`
 	Votes     int    `json:"votes"`
 	Timestamp uint64 `json:"last_vote_timestamp"`
+}
+
+type StaffInfo struct {
+	Groups map[string]GroupInfo `json:"groups"`
+}
+
+type GroupInfo struct {
+	Title   string   `json:"title"`
+	Color   string   `json:"color"`
+	Weight  int      `json:"weight"`
+	Members []string `json:"members"`
 }
 
 type StatusResponse struct {
@@ -155,6 +167,90 @@ func main() {
 	})
 
 	router.HandleFunc("/api/v1/staff", func(w http.ResponseWriter, r *http.Request) {
+		// 5 seconds to query the groups and players, and finally process the data. Should be enough
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		resultCh := make(chan interface{}, 1)
+
+		go func() {
+			playerGroups := map[string]string{}
+
+			// Query player primary groups
+			rows1, err := db.QueryContext(ctx,
+				fmt.Sprintf("select username, primary_group from %s.%splayers;",
+					config.Database.LuckPermsDatabaseName,
+					config.Database.LuckPermsTablePrefix))
+			if err != nil {
+				resultCh <- err
+				return
+			}
+			defer rows1.Close()
+
+			var username string
+			var primaryGroup string
+			for rows1.Next() {
+				if err := rows1.Scan(&username, &primaryGroup); err != nil {
+					zap.L().Warn("failed to scan row", zap.Error(err))
+					continue
+				}
+
+				// Filter out only relevant groups
+				for _, relevant := range config.Database.StaffGroupNames {
+					if relevant == primaryGroup {
+						playerGroups[username] = primaryGroup
+						break
+					}
+				}
+			}
+
+			// Query group title and color
+			seenGroupNames := map[string]bool{}
+			groupNamesQuery := strings.Builder{}
+			var queryPart string
+			for _, groupName := range playerGroups {
+				if _, ok := seenGroupNames[groupName]; !ok {
+					seenGroupNames[groupName] = true
+					fmt.Fprintf(&groupNamesQuery, "name = '%s' or ", groupName)
+				}
+			}
+
+			rows2, err := db.QueryContext(ctx,
+				fmt.Sprintf("select name, permission from %s.%sgroup_permissions where (%s) and "+
+					"(permission like 'prefix.%%' or permission like 'weight.%%');",
+					config.Database.LuckPermsDatabaseName,
+					config.Database.LuckPermsTablePrefix,
+					groupNamesQuery.String()[:groupNamesQuery.Len()-4]))
+			if err != nil {
+				resultCh <- err
+				return
+			}
+			defer rows2.Close()
+
+			var groupName string
+			var permissionNode string
+			for rows2.Next() {
+				if err := rows2.Scan(&groupName, &permissionNode); err != nil {
+					zap.L().Warn("failed to scan row", zap.Error(err))
+					continue
+				}
+
+			}
+
+			resultCh <- voters
+		}()
+
+		select {
+		case result := <-resultCh:
+			if err, ok := result.(error); ok {
+				zap.L().Error("failed to fetch votes", zap.Error(err))
+				writeResponse(w, http.StatusInternalServerError, "database access error")
+			} else {
+				writeResponse(w, http.StatusOK, result)
+			}
+		case <-ctx.Done():
+			zap.L().Error("timed out while getting or processing database entries")
+			writeResponse(w, http.StatusInternalServerError, "timed out")
+		}
 		writeResponse(w, http.StatusNotImplemented, "not done yet")
 	})
 
