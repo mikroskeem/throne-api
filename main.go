@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -92,17 +93,34 @@ func main() {
 	// Set up HTTP server
 	router := mux.NewRouter()
 	router.HandleFunc("/api/v1/votes", func(w http.ResponseWriter, r *http.Request) {
+		votersLimit := -1
+		if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+			if num, err := strconv.Atoi(limitStr); err == nil && num > 0 {
+				votersLimit = num
+			} else {
+				writeResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid limit: %s", limitStr))
+				return
+			}
+		}
+
 		// 3 seconds to query the voters and process the data. Should be fine?
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		resultCh := make(chan interface{}, 1)
 
 		go func() {
+			var limitStr string
+			if votersLimit != -1 {
+				limitStr = fmt.Sprintf("limit %d", votersLimit)
+			} else {
+				limitStr = ""
+			}
 			rows, err := db.QueryContext(ctx,
 				// Pls no bully but prepared statements are not needed here - not handling user input, technically
-				fmt.Sprintf("select voter_name, votes, last_vote_timestamp from %s.%s order by votes desc;",
+				fmt.Sprintf("select voter_name, votes, last_vote_timestamp from %s.%s order by votes desc %s;",
 					config.Database.ConfettiDatabaseName,
-					config.Database.ConfettiVotesTableName))
+					config.Database.ConfettiVotesTableName,
+					limitStr))
 			if err != nil {
 				resultCh <- err
 				return
