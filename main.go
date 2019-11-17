@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -25,7 +26,27 @@ const (
 )
 
 var (
-	config throneAPIConfig
+	config           throneAPIConfig
+	checkedRankNames = make(map[string]bool)
+	chatColorRegexp  = regexp.MustCompile("(?i)[&§][0-9A-FK-OR]")
+	chatColorsToHex  = map[string]string{
+		"0": "#000000",
+		"1": "#0000AA",
+		"2": "#00AA00",
+		"3": "#00AAAA",
+		"4": "#AA0000",
+		"5": "#AA00AA",
+		"6": "#FFAA00",
+		"7": "#AAAAAA",
+		"8": "#555555",
+		"9": "#5555FF",
+		"a": "#55FF55",
+		"b": "#55FFFF",
+		"c": "#FF5555",
+		"d": "#FF55FF",
+		"e": "#FFFF55",
+		"f": "#FFFFFF",
+	}
 )
 
 type VoterInfo struct {
@@ -83,6 +104,11 @@ func main() {
 
 	if err = toml.Unmarshal(rawConfig, &config); err != nil {
 		zap.L().Panic("failed to parse configuration", zap.Error(err))
+	}
+
+	// Put together rank names map for easier checking
+	for _, rankName := range config.Database.StaffGroupNames {
+		checkedRankNames[rankName] = true
 	}
 
 	// Connect to the database
@@ -173,50 +199,131 @@ func main() {
 		resultCh := make(chan interface{}, 1)
 
 		go func() {
-			playerGroups := map[string]string{}
+			collectedRanks := map[string]*GroupInfo{}
+			primaryGroupsScanned := make(chan map[string]*GroupInfo, 1)
+			userPermissionsScanned := make(chan map[string]*GroupInfo, 1)
 
-			// Query player primary groups
-			rows1, err := db.QueryContext(ctx,
-				fmt.Sprintf("select username, primary_group from %s.%splayers;",
-					config.Database.LuckPermsDatabaseName,
-					config.Database.LuckPermsTablePrefix))
-			if err != nil {
-				resultCh <- err
-				return
-			}
-			defer rows1.Close()
+			// Collect groups and their members from players table
+			go func() {
+				rows1, err := db.QueryContext(ctx,
+					// TODO: let database do the work and filter out unwanted groups
+					fmt.Sprintf("select username, primary_group from %s.%splayers;",
+						config.Database.LuckPermsDatabaseName,
+						config.Database.LuckPermsTablePrefix))
+				if err != nil {
+					resultCh <- err
+					return
+				}
+				defer rows1.Close()
 
-			var username string
-			var primaryGroup string
-			for rows1.Next() {
-				if err := rows1.Scan(&username, &primaryGroup); err != nil {
-					zap.L().Warn("failed to scan row", zap.Error(err))
-					continue
+				collected := map[string]*GroupInfo{}
+
+				var username string
+				var primaryGroup string
+				for rows1.Next() {
+					if err := rows1.Scan(&username, &primaryGroup); err != nil {
+						zap.L().Warn("failed to scan row", zap.Error(err))
+						continue
+					}
+
+					// Filter players out only from relevant groups
+					if _, ok := checkedRankNames[primaryGroup]; !ok {
+						continue
+					}
+
+					if _, ok := collected[primaryGroup]; !ok {
+						collected[primaryGroup] = &GroupInfo{}
+					}
+
+					collected[primaryGroup].Members = append(collected[primaryGroup].Members, username)
 				}
 
-				// Filter out only relevant groups
-				for _, relevant := range config.Database.StaffGroupNames {
-					if relevant == primaryGroup {
-						playerGroups[username] = primaryGroup
-						break
+				primaryGroupsScanned <- collected
+			}()
+
+			// Collect groups from user permissions
+			go func() {
+				rows2, err := db.QueryContext(ctx,
+					// TODO: let database do the work and filter out unwanted groups
+					fmt.Sprintf("select permission, (select %[1]s.%[2]splayers.username from %[1]s.%[2]splayers where "+
+						"%[1]s.%[2]splayers.uuid = %[1]s.%[2]suser_permissions.uuid) as name from "+
+						"%[1]s.%[2]suser_permissions where permission like 'group.%%';",
+						config.Database.LuckPermsDatabaseName,
+						config.Database.LuckPermsTablePrefix))
+				if err != nil {
+					resultCh <- err
+					return
+				}
+				defer rows2.Close()
+
+				collected := map[string]*GroupInfo{}
+
+				var permissionNode string
+				var username string
+				for rows2.Next() {
+					if err := rows2.Scan(&permissionNode, &username); err != nil {
+						zap.L().Warn("failed to scan row", zap.Error(err))
+						continue
+					}
+
+					split := strings.Split(permissionNode, ".")
+					if len(split) != 2 {
+						zap.L().Warn("unable to parse group permission node", zap.String("node", permissionNode))
+						continue
+					}
+					rankName := split[1]
+
+					// Filter players out only from relevant groups
+					if _, ok := checkedRankNames[rankName]; !ok {
+						continue
+					}
+
+					if _, ok := collected[rankName]; !ok {
+						collected[rankName] = &GroupInfo{}
+					}
+
+					collected[rankName].Members = append(collected[rankName].Members, username)
+				}
+
+				userPermissionsScanned <- collected
+			}()
+
+			// Wait for primary groups scan
+			if s := <-primaryGroupsScanned; s != nil {
+				for k, v := range s {
+					collectedRanks[k] = v
+				}
+			}
+
+			// Wait for user permissions scan
+			if s := <-userPermissionsScanned; s != nil {
+				for k, v := range s {
+					if rank, ok := collectedRanks[k]; ok {
+						for _, m := range v.Members {
+							// TODO: deduplicate
+							rank.Members = append(rank.Members, m)
+						}
+					} else {
+						collectedRanks[k] = v
 					}
 				}
 			}
 
 			// Query group title and color
-			seenGroupNames := map[string]bool{}
-			groupNamesQuery := strings.Builder{}
-			var queryPart string
-			for _, groupName := range playerGroups {
-				if _, ok := seenGroupNames[groupName]; !ok {
-					seenGroupNames[groupName] = true
-					fmt.Fprintf(&groupNamesQuery, "name = '%s' or ", groupName)
+			var groupNamesQuery strings.Builder
+			if len(collectedRanks) > 0 {
+				for rankName := range collectedRanks {
+					fmt.Fprintf(&groupNamesQuery, "name = '%s' or ", rankName)
 				}
+			} else {
+				// Write atleast one valid SQL value to avoid syntax error + ' or ' to make slicing work fine
+				groupNamesQuery.WriteString("1 or ")
 			}
 
-			rows2, err := db.QueryContext(ctx,
-				fmt.Sprintf("select name, permission from %s.%sgroup_permissions where (%s) and "+
-					"(permission like 'prefix.%%' or permission like 'weight.%%');",
+			rows3, err := db.QueryContext(ctx,
+				fmt.Sprintf(
+					"select name, permission from %s.%sgroup_permissions where (%s) and "+
+						"(permission like 'prefix.%%' or permission like 'weight.%%');",
 					config.Database.LuckPermsDatabaseName,
 					config.Database.LuckPermsTablePrefix,
 					groupNamesQuery.String()[:groupNamesQuery.Len()-4]))
@@ -224,19 +331,61 @@ func main() {
 				resultCh <- err
 				return
 			}
-			defer rows2.Close()
+			defer rows3.Close()
 
 			var groupName string
 			var permissionNode string
-			for rows2.Next() {
-				if err := rows2.Scan(&groupName, &permissionNode); err != nil {
+			for rows3.Next() {
+				if err := rows3.Scan(&groupName, &permissionNode); err != nil {
 					zap.L().Warn("failed to scan row", zap.Error(err))
 					continue
 				}
 
+				split := strings.Split(permissionNode, ".")
+
+				switch split[0] {
+				case "weight":
+					if num, err := strconv.Atoi(split[1]); err == nil {
+						if rank, ok := collectedRanks[groupName]; ok {
+							rank.Weight = num
+						} else {
+							zap.L().Error("got weight for unknown group", zap.String("node", permissionNode), zap.String("groupName", groupName))
+						}
+
+					}
+				case "prefix":
+					var minecraftPrefix string
+					switch len(split) {
+					case 2:
+						minecraftPrefix = split[1]
+					case 3:
+						minecraftPrefix = split[2]
+					default:
+						zap.L().Warn("could not get rank prefix", zap.String("rankName", groupName))
+						minecraftPrefix = ""
+					}
+
+					if rank, ok := collectedRanks[groupName]; ok {
+						// Get rank color by getting last color code
+						// Not perfect but most likely works
+						colorMatches := chatColorRegexp.FindAllString(minecraftPrefix, -1)
+						if len(colorMatches) > 0 {
+							foundColor := strings.ToLower(colorMatches[len(colorMatches)-1][1:])
+							if hexColor, ok := chatColorsToHex[foundColor]; ok {
+								rank.Color = hexColor
+							}
+						}
+
+						// Get rank title by stripping minecraft color codes
+						rank.Title = chatColorRegexp.ReplaceAllString(minecraftPrefix, "")
+					} else {
+						zap.L().Error("got prefix for unknown group", zap.String("node", permissionNode), zap.String("groupName", groupName))
+					}
+
+				}
 			}
 
-			resultCh <- voters
+			resultCh <- collectedRanks
 		}()
 
 		select {
@@ -251,7 +400,6 @@ func main() {
 			zap.L().Error("timed out while getting or processing database entries")
 			writeResponse(w, http.StatusInternalServerError, "timed out")
 		}
-		writeResponse(w, http.StatusNotImplemented, "not done yet")
 	})
 
 	router.HandleFunc("/api/v1/player/{player}", func(w http.ResponseWriter, r *http.Request) {
