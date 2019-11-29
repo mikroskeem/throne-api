@@ -201,14 +201,20 @@ func main() {
 
 			// Wait for user permissions scan
 			if s := <-userPermissionsScanned; s != nil {
-				for k, v := range s {
-					if rank, ok := collectedRanks[k]; ok {
-						for _, m := range v.Members {
-							// TODO: deduplicate
-							rank.Members = append(rank.Members, m)
+				for rankName, collectedRank := range s {
+					if rank, ok := collectedRanks[rankName]; ok {
+						existingMembers := map[string]bool{}
+						for _, name := range rank.Members {
+							existingMembers[name] = true
+						}
+
+						for _, name := range collectedRank.Members {
+							if _, ok := existingMembers[name]; !ok {
+								rank.Members = append(rank.Members, name)
+							}
 						}
 					} else {
-						collectedRanks[k] = v
+						collectedRanks[rankName] = collectedRank
 					}
 				}
 			}
