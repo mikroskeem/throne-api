@@ -326,4 +326,5 @@ func (e *Endpoints) HandleStaff(w http.ResponseWriter, r *http.Request) {
 }
 
 func (e *Endpoints) HandlePlayer(w http.ResponseWriter, r *http.Request) {
+	writeResponse(w, http.StatusNotImplemented, "not done yet")
 }

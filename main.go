@@ -88,10 +88,7 @@ func main() {
 	router := mux.NewRouter()
 	router.HandleFunc("/api/v1/votes", endpoints.HandleVoters)
 	router.HandleFunc("/api/v1/staff", endpoints.HandleStaff)
-
-	router.HandleFunc("/api/v1/player/{player}", func(w http.ResponseWriter, r *http.Request) {
-		writeResponse(w, http.StatusNotImplemented, "not done yet")
-	})
+	router.HandleFunc("/api/v1/player/{player}", endpoints.HandlePlayer)
 
 	srv := &http.Server{
 		Addr:         config.RestAPI.ListenAddress,
