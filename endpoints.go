@@ -124,24 +124,29 @@ func (e *Endpoints) HandleStaff(w http.ResponseWriter, r *http.Request) {
 
 			collected := map[string]*GroupInfo{}
 
-			var username string
-			var primaryGroup string
+			var username *string
+			var primaryGroup *string
 			for rows1.Next() {
 				if err := rows1.Scan(&username, &primaryGroup); err != nil {
 					zap.L().Warn("failed to scan row", zap.Error(err))
 					continue
 				}
 
-				// Filter players out only from relevant groups
-				if _, ok := checkedRankNames[primaryGroup]; !ok {
+				// Skip nil usernames and primaryGroups
+				if username == nil || primaryGroup == nil {
 					continue
 				}
 
-				if _, ok := collected[primaryGroup]; !ok {
-					collected[primaryGroup] = &GroupInfo{}
+				// Filter players out only from relevant groups
+				if _, ok := checkedRankNames[*primaryGroup]; !ok {
+					continue
 				}
 
-				collected[primaryGroup].Members = append(collected[primaryGroup].Members, username)
+				if _, ok := collected[*primaryGroup]; !ok {
+					collected[*primaryGroup] = &GroupInfo{}
+				}
+
+				collected[*primaryGroup].Members = append(collected[*primaryGroup].Members, *username)
 			}
 
 			primaryGroupsScanned <- collected
@@ -167,17 +172,22 @@ func (e *Endpoints) HandleStaff(w http.ResponseWriter, r *http.Request) {
 
 			collected := map[string]*GroupInfo{}
 
-			var permissionNode string
-			var username string
+			var permissionNode *string
+			var username *string
 			for rows2.Next() {
 				if err := rows2.Scan(&permissionNode, &username); err != nil {
 					zap.L().Warn("failed to scan row", zap.Error(err))
 					continue
 				}
 
-				split := strings.Split(permissionNode, ".")
+				// Skip nil usernames and permission nodes
+				if username == nil || permissionNode == nil {
+					continue
+				}
+
+				split := strings.Split(*permissionNode, ".")
 				if len(split) != 2 {
-					zap.L().Warn("unable to parse group permission node", zap.String("node", permissionNode))
+					zap.L().Warn("unable to parse group permission node", zap.String("node", *permissionNode))
 					continue
 				}
 				rankName := split[1]
@@ -191,7 +201,7 @@ func (e *Endpoints) HandleStaff(w http.ResponseWriter, r *http.Request) {
 					collected[rankName] = &GroupInfo{}
 				}
 
-				collected[rankName].Members = append(collected[rankName].Members, username)
+				collected[rankName].Members = append(collected[rankName].Members, *username)
 			}
 
 			userPermissionsScanned <- collected
