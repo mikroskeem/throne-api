@@ -288,6 +288,9 @@ func main() {
 
 						// Get rank title by stripping minecraft color codes
 						rank.Title = chatColorRegexp.ReplaceAllString(minecraftPrefix, "")
+
+						// Post process (unescape etc.)
+						rank.Title = strings.ReplaceAll(rank.Title, `\`, "")
 					} else {
 						zap.L().Error("got prefix for unknown group", zap.String("node", permissionNode), zap.String("groupName", groupName))
 					}
