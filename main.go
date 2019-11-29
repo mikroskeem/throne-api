@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -18,11 +17,6 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/mux"
 	"go.uber.org/zap"
-)
-
-const (
-	errorStatus = "error"
-	okStatus    = "ok"
 )
 
 var (
@@ -48,43 +42,6 @@ var (
 		"f": "#FFFFFF",
 	}
 )
-
-type VoterInfo struct {
-	Username  string `json:"voter_name"`
-	Votes     int    `json:"votes"`
-	Timestamp uint64 `json:"last_vote_timestamp"`
-}
-
-type StaffInfo struct {
-	Groups map[string]GroupInfo `json:"groups"`
-}
-
-type GroupInfo struct {
-	Title   string   `json:"title"`
-	Color   string   `json:"color"`
-	Weight  int      `json:"weight"`
-	Members []string `json:"members"`
-}
-
-type StatusResponse struct {
-	Status string      `json:"status"`
-	Data   interface{} `json:"data"`
-}
-
-func writeResponse(w http.ResponseWriter, status int, body interface{}) {
-	var stringStatus string
-	if status == http.StatusOK {
-		stringStatus = okStatus
-	} else {
-		stringStatus = errorStatus
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", config.RestAPI.CORSOrigins)
-	w.Header().Set("Access-Control-Allow-Methods", "GET")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(StatusResponse{stringStatus, body})
-}
 
 func main() {
 	var err error
@@ -128,69 +85,11 @@ func main() {
 		zap.L().Info("database connection works")
 	}
 
+	endpoints := Endpoints{db: db}
+
 	// Set up HTTP server
 	router := mux.NewRouter()
-	router.HandleFunc("/api/v1/votes", func(w http.ResponseWriter, r *http.Request) {
-		votersLimit := -1
-		if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
-			if num, err := strconv.Atoi(limitStr); err == nil && num > 0 {
-				votersLimit = num
-			} else {
-				writeResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid limit: %s", limitStr))
-				return
-			}
-		}
-
-		// 3 seconds to query the voters and process the data. Should be fine?
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		resultCh := make(chan interface{}, 1)
-
-		go func() {
-			var limitStr string
-			if votersLimit != -1 {
-				limitStr = fmt.Sprintf("limit %d", votersLimit)
-			} else {
-				limitStr = ""
-			}
-			rows, err := db.QueryContext(ctx,
-				// Pls no bully but prepared statements are not needed here - not handling user input, technically
-				fmt.Sprintf("select voter_name, votes, last_vote_timestamp from %s.%s order by votes desc %s;",
-					config.Database.ConfettiDatabaseName,
-					config.Database.ConfettiVotesTableName,
-					limitStr))
-			if err != nil {
-				resultCh <- err
-				return
-			}
-			defer rows.Close()
-
-			voters := []VoterInfo{}
-			for rows.Next() {
-				voter := VoterInfo{}
-				if err := rows.Scan(&(voter.Username), &(voter.Votes), &(voter.Timestamp)); err != nil {
-					zap.L().Warn("failed to scan row", zap.Error(err))
-					continue
-				}
-				voters = append(voters, voter)
-			}
-
-			resultCh <- voters
-		}()
-
-		select {
-		case result := <-resultCh:
-			if err, ok := result.(error); ok {
-				zap.L().Error("failed to fetch votes", zap.Error(err))
-				writeResponse(w, http.StatusInternalServerError, "database access error")
-			} else {
-				writeResponse(w, http.StatusOK, result)
-			}
-		case <-ctx.Done():
-			zap.L().Error("timed out while getting or processing database entries")
-			writeResponse(w, http.StatusInternalServerError, "timed out")
-		}
-	})
+	router.HandleFunc("/api/v1/votes", endpoints.HandleVoters)
 
 	router.HandleFunc("/api/v1/staff", func(w http.ResponseWriter, r *http.Request) {
 		// 5 seconds to query the groups and players, and finally process the data. Should be enough
@@ -207,7 +106,9 @@ func main() {
 			go func() {
 				rows1, err := db.QueryContext(ctx,
 					// TODO: let database do the work and filter out unwanted groups
-					fmt.Sprintf("select username, primary_group from %s.%splayers;",
+					fmt.Sprintf("select (select original_username from %[1]s.%[2]s where username = %[3]s.%[4]splayers.username) as username, primary_group from %[3]s.%[4]splayers;",
+						config.Database.BenjiAuthDatabaseName,
+						config.Database.BenjiAuthUsersTableName,
 						config.Database.LuckPermsDatabaseName,
 						config.Database.LuckPermsTablePrefix))
 				if err != nil {
@@ -245,11 +146,14 @@ func main() {
 			go func() {
 				rows2, err := db.QueryContext(ctx,
 					// TODO: let database do the work and filter out unwanted groups
-					fmt.Sprintf("select permission, (select %[1]s.%[2]splayers.username from %[1]s.%[2]splayers where "+
+					fmt.Sprintf("select permission, (select (select original_username from %[3]s.%[4]s where username = %[1]s.%[2]splayers.username) as "+
+						"username from %[1]s.%[2]splayers where "+
 						"%[1]s.%[2]splayers.uuid = %[1]s.%[2]suser_permissions.uuid) as name from "+
 						"%[1]s.%[2]suser_permissions where permission like 'group.%%';",
 						config.Database.LuckPermsDatabaseName,
-						config.Database.LuckPermsTablePrefix))
+						config.Database.LuckPermsTablePrefix,
+						config.Database.BenjiAuthDatabaseName,
+						config.Database.BenjiAuthUsersTableName))
 				if err != nil {
 					resultCh <- err
 					return
