@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -217,6 +218,11 @@ func main() {
 						collectedRanks[rankName] = collectedRank
 					}
 				}
+			}
+
+			// Sort group members
+			for _, rank := range collectedRanks {
+				sort.Strings(rank.Members)
 			}
 
 			// Query group title and color
