@@ -301,7 +301,7 @@ func main() {
 		select {
 		case result := <-resultCh:
 			if err, ok := result.(error); ok {
-				zap.L().Error("failed to fetch votes", zap.Error(err))
+				zap.L().Error("failed to fetch staff info", zap.Error(err))
 				writeResponse(w, http.StatusInternalServerError, "database access error")
 			} else {
 				writeResponse(w, http.StatusOK, result)
