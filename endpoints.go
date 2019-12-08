@@ -45,7 +45,7 @@ func (e *Endpoints) HandleVoters(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3 seconds to query the voters and process the data. Should be fine?
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 	resultCh := make(chan interface{}, 1)
 
@@ -98,7 +98,7 @@ func (e *Endpoints) HandleVoters(w http.ResponseWriter, r *http.Request) {
 func (e *Endpoints) HandleStaff(w http.ResponseWriter, r *http.Request) {
 
 	// 5 seconds to query the groups and players, and finally process the data. Should be enough
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	resultCh := make(chan interface{}, 1)
 
