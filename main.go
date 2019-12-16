@@ -131,6 +131,4 @@ func main() {
 	case <-exitCh:
 		zap.L().Info("exiting")
 	}
-
-	os.Exit(0)
 }
