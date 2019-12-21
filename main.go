@@ -43,7 +43,7 @@ var (
 )
 
 func main() {
-	flag.StringVar(&configFileName, "config", "./config.yml", "Configuration file")
+	flag.StringVar(&configFileName, "config", "./config.toml", "Configuration file")
 	flag.Parse()
 
 	var err error
