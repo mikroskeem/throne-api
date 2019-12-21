@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"flag"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -17,6 +18,7 @@ import (
 )
 
 var (
+	configFileName   string
 	config           throneAPIConfig
 	checkedRankNames = make(map[string]bool)
 	chatColorRegexp  = regexp.MustCompile("(?i)[&§][0-9A-FK-OR]")
@@ -41,6 +43,9 @@ var (
 )
 
 func main() {
+	flag.StringVar(&configFileName, "config", "./config.yml", "Configuration file")
+	flag.Parse()
+
 	var err error
 	if logger, err := zap.NewProduction(); err == nil {
 		zap.ReplaceGlobals(logger)
@@ -52,7 +57,7 @@ func main() {
 
 	// Load configuration
 	var rawConfig []byte
-	if rawConfig, err = ioutil.ReadFile("./config.toml"); err != nil {
+	if rawConfig, err = ioutil.ReadFile(configFileName); err != nil {
 		zap.L().Panic("failed to read configuration", zap.Error(err))
 	}
 
